@@ -48,7 +48,7 @@ if submit:
     try:
         # Append using gspread (add your credentials if you want full write access)
         sheet = pd.read_csv(CSV_URL)
-        sheet = sheet.append(new_row, ignore_index=True)
+        sheet = pd.concat([sheet, pd.DataFrame([new_row])], ignore_index=True)
         sheet.to_csv("updated.csv", index=False)
         st.success("✅ Marks added! (You can update manually in Sheet)")
     except Exception as e:
