@@ -1,90 +1,81 @@
+# jee_analyzer.py
+
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import openai
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime
+CREDENTIALS_FILE = "jee-analyzer-bot@jee-analyzer.iam.gserviceaccount.com"
 
-# --- CONFIG ---
-st.set_page_config(page_title="JEE Marks Analyzer", layout="centered")
 
-# --- TITLE ---
-st.title("📈 JEE Marks Analyzer with AI Tips")
-st.markdown("Analyze your performance and get smart AI feedback for PCM subjects.")
 
-# --- GOOGLE SHEET SETUP ---
-SHEET_ID = "1P9Nj77HlgM7Jg7JhdU8y7pYTU_UWK03zjoYBrrL5eWc"
-SHEET_NAME = "Sheet1"
-CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME}"
+# --- Configuration ---
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1P9Nj77HlgM7Jg7JhdU8y7pYTU_UWK03zjoYBrrL5eWc/edit"
+CREDENTIALS_FILE = "jee-analyzer-28e94c261564.json"  # <-- Replace this with your downloaded credentials file
+openai.api_key = "your_openai_api_key"        # <-- Replace this with your OpenAI API key
 
-# --- LOAD DATA ---
-try:
-    df = pd.read_csv(CSV_URL)
-    df['Date'] = pd.to_datetime(df['Date'])
-    df = df.sort_values(by="Date")
-    st.success("✅ Marks loaded from Google Sheets successfully!")
-except Exception as e:
-    st.error("❌ Failed to load data from Google Sheets.")
-    st.exception(e)
-    st.stop()
+# --- Setup Google Sheet Connection ---
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+client = gspread.authorize(creds)
+sheet = client.open_by_url(SHEET_URL).sheet1
 
-# --- INPUT FORM ---
-with st.form("new_test_form"):
-    st.subheader("➕ Add New Test Result")
-    date = st.date_input("Test Date", datetime.today())
+# --- Load DataFrame from Sheet ---
+data = sheet.get_all_records()
+df = pd.DataFrame(data)
+
+st.title("📊 JEE Marks Analyzer with AI Tips")
+st.write("Analyze and track your performance in Physics, Chemistry, and Maths tests.")
+
+# --- Input Section ---
+with st.form("input_form"):
+    test_name = st.text_input("Test Name")
     physics = st.number_input("Physics Marks", 0, 100)
     chemistry = st.number_input("Chemistry Marks", 0, 100)
     maths = st.number_input("Maths Marks", 0, 100)
-    submit = st.form_submit_button("Add to Sheet")
+    submitted = st.form_submit_button("Save & Analyze")
 
-if submit:
+if submitted:
+    total = physics + chemistry + maths
     new_row = {
-        "Date": date.strftime("%Y-%m-%d"),
+        "Test Name": test_name,
         "Physics": physics,
         "Chemistry": chemistry,
         "Maths": maths,
+        "Total": total
     }
     try:
-        # Append using gspread (add your credentials if you want full write access)
-        sheet = pd.read_csv(CSV_URL)
-        sheet = pd.concat([sheet, pd.DataFrame([new_row])], ignore_index=True)
-        sheet.to_csv("updated.csv", index=False)
-        st.success("✅ Marks added! (You can update manually in Sheet)")
+        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+        sheet.clear()
+        sheet.update([df.columns.values.tolist()] + df.values.tolist())
+        st.success("✅ Test data added and sheet updated!")
     except Exception as e:
-        st.error("⚠️ Failed to write to sheet directly. Try adding manually.")
-        st.exception(e)
+        st.warning(f"⚠️ Failed to write to sheet directly: {e}")
 
-# --- SHOW GRAPH ---
-st.subheader("📊 Score Trends")
+# --- Graph Section ---
+if not df.empty:
+    st.subheader("📈 Score Trend Over Time")
+    st.line_chart(df.set_index("Test Name")[["Physics", "Chemistry", "Maths", "Total"]])
 
-for subject in ['Physics', 'Chemistry', 'Maths']:
-    st.markdown(f"**{subject}**")
-    plt.figure()
-    plt.plot(df['Date'], df[subject], marker='o')
-    plt.ylabel("Marks")
-    plt.xticks(rotation=45)
-    st.pyplot(plt)
+    # --- AI Tips ---
+    if st.button("🧠 Get Smart GPT Tips"):
+        prompt = f"""
+        I am a class 12 JEE aspirant. Here are my recent scores:
 
-# --- GPT-BASED AI FEEDBACK ---
-st.subheader("🧠 AI Performance Feedback")
+        {df.tail(3).to_string(index=False)}
 
-# You can replace with your own API key
-openai.api_key = "sk-..."  # Replace with your OpenAI API key
-
-try:
-    avg_scores = df[['Physics', 'Chemistry', 'Maths']].mean().round(1)
-    prompt = (
-        f"I'm a JEE aspirant. Based on my average scores: "
-        f"Physics: {avg_scores['Physics']}, Chemistry: {avg_scores['Chemistry']}, Maths: {avg_scores['Maths']}. "
-        f"Give subject-wise study suggestions and tips to improve."
-    )
-
-    with st.spinner("Generating smart tips..."):
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt}]
-        )
-        st.success("✅ Here's what AI recommends:")
-        st.write(response.choices[0].message.content)
-except Exception as e:
-    st.warning("⚠️ Couldn't fetch AI feedback. Check your API key or internet.")
+        Give me personalized, smart improvement suggestions for each subject in bullet points.
+        """
+        try:
+            response = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            advice = response.choices[0].message.content
+            st.markdown("### 📌 Personalized Suggestions")
+            st.markdown(advice)
+        except Exception as e:
+            st.error(f"❌ GPT failed: {e}")
+else:
+    st.info("No data yet. Add your first test above!")
